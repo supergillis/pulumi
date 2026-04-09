@@ -20,22 +20,22 @@ __all__ = [
 ]
 
 class FooArgsDict(TypedDict):
-    a: NotRequired[pulumi.Input[_builtins.bool]]
+    a: NotRequired[pulumi.Input[Optional[_builtins.bool]]]
 
 @pulumi.input_type
 class FooArgs:
     def __init__(__self__, *,
-                 a: Optional[pulumi.Input[_builtins.bool]] = None):
+                 a: pulumi.Input[Optional[_builtins.bool]] = None):
         if a is not None:
             pulumi.set(__self__, "a", a)
 
     @_builtins.property
     @pulumi.getter
-    def a(self) -> Optional[pulumi.Input[_builtins.bool]]:
+    def a(self) -> pulumi.Input[Optional[_builtins.bool]]:
         return pulumi.get(self, "a")
 
     @a.setter
-    def a(self, value: Optional[pulumi.Input[_builtins.bool]]):
+    def a(self, value: pulumi.Input[Optional[_builtins.bool]]):
         pulumi.set(self, "a", value)
 
 

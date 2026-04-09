@@ -61,7 +61,7 @@ class StaticPage(pulumi.ComponentResource):
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
                  foo: Optional[Union['FooArgs', 'FooArgsDict']] = None,
-                 index_content: Optional[pulumi.Input[_builtins.str]] = None,
+                 index_content: pulumi.Input[Optional[_builtins.str]] = None,
                  __props__=None):
         """
         Create a StaticPage resource with the given unique name, props, and options.
@@ -95,7 +95,7 @@ class StaticPage(pulumi.ComponentResource):
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
                  foo: Optional[Union['FooArgs', 'FooArgsDict']] = None,
-                 index_content: Optional[pulumi.Input[_builtins.str]] = None,
+                 index_content: pulumi.Input[Optional[_builtins.str]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
