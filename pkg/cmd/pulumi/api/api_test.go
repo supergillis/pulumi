@@ -21,6 +21,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -231,6 +233,117 @@ func TestNegotiateAccept_InvalidValue(t *testing.T) {
 	var apiErr *APIError
 	require.True(t, errors.As(err, &apiErr))
 	assert.Equal(t, ErrInvalidFlags, apiErr.Envelope.Error.Code)
+}
+
+func TestOpDeclaresQueryParam(t *testing.T) {
+	t.Parallel()
+	op := &Operation{Params: []ParamSpec{
+		{Name: "id", In: "path"},
+		{Name: "lang", In: "query"},
+		{Name: "os", In: "query"},
+	}}
+	assert.True(t, opDeclaresQueryParam(op, "lang"))
+	assert.True(t, opDeclaresQueryParam(op, "os"))
+	assert.False(t, opDeclaresQueryParam(op, "id"), "path param must not count")
+	assert.False(t, opDeclaresQueryParam(op, "unknown"))
+	assert.False(t, opDeclaresQueryParam(nil, "lang"))
+}
+
+// TestInjectContextQueryParams covers the auto-injection of context-resolved
+// query parameters. Cases use "os" as the injected value because it's
+// deterministic per-platform; "lang" depends on ambient project detection.
+func TestInjectContextQueryParams(t *testing.T) {
+	t.Parallel()
+
+	// osInjectable is true on platforms where resolveContextQueryVar("os", ...)
+	// returns a non-empty string. Tests that assert the injected value skip
+	// on platforms where it would come back empty.
+	osInjectable := runtime.GOOS == "linux" || runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+
+	t.Run("declared and unset is injected", func(t *testing.T) {
+		if !osInjectable {
+			t.Skipf("runtime.GOOS=%q not mapped", runtime.GOOS)
+		}
+		op := &Operation{Params: []ParamSpec{{Name: "os", In: "query"}}}
+		extras := url.Values{}
+		require.NoError(t, injectContextQueryParams(op, "GET", "", &apiFlags{}, extras))
+		assert.NotEmpty(t, extras.Get("os"))
+	})
+
+	t.Run("not declared is skipped", func(t *testing.T) {
+		op := &Operation{}
+		extras := url.Values{}
+		require.NoError(t, injectContextQueryParams(op, "GET", "", &apiFlags{}, extras))
+		assert.Empty(t, extras)
+	})
+
+	t.Run("value in extras wins over auto-inject", func(t *testing.T) {
+		op := &Operation{Params: []ParamSpec{{Name: "os", In: "query"}}}
+		extras := url.Values{"os": {"plan9"}}
+		require.NoError(t, injectContextQueryParams(op, "GET", "", &apiFlags{}, extras))
+		assert.Equal(t, []string{"plan9"}, extras["os"])
+	})
+
+	t.Run("value in raw query wins over auto-inject", func(t *testing.T) {
+		op := &Operation{Params: []ParamSpec{{Name: "os", In: "query"}}}
+		extras := url.Values{}
+		require.NoError(t, injectContextQueryParams(op, "GET", "os=plan9", &apiFlags{}, extras))
+		assert.False(t, extras.Has("os"), "must not duplicate when raw query already sets it")
+	})
+
+	t.Run("raw query with unrelated key does not block injection", func(t *testing.T) {
+		if !osInjectable {
+			t.Skipf("runtime.GOOS=%q not mapped", runtime.GOOS)
+		}
+		op := &Operation{Params: []ParamSpec{{Name: "os", In: "query"}}}
+		extras := url.Values{}
+		require.NoError(t, injectContextQueryParams(op, "GET", "filter=foo", &apiFlags{}, extras))
+		assert.NotEmpty(t, extras.Get("os"))
+	})
+
+	t.Run("non-body methods are no-ops", func(t *testing.T) {
+		op := &Operation{Params: []ParamSpec{{Name: "os", In: "query"}}}
+		for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+			extras := url.Values{}
+			require.NoError(t, injectContextQueryParams(op, method, "", &apiFlags{}, extras))
+			assert.Empty(t, extras, "method %s must not trigger injection", method)
+		}
+	})
+
+	t.Run("HEAD behaves like GET", func(t *testing.T) {
+		if !osInjectable {
+			t.Skipf("runtime.GOOS=%q not mapped", runtime.GOOS)
+		}
+		op := &Operation{Params: []ParamSpec{{Name: "os", In: "query"}}}
+		extras := url.Values{}
+		require.NoError(t, injectContextQueryParams(op, "HEAD", "", &apiFlags{}, extras))
+		assert.NotEmpty(t, extras.Get("os"))
+	})
+}
+
+// TestResolveContextQueryVar covers the per-var value resolution.
+// "lang" requires ambient project detection and is exercised separately.
+func TestResolveContextQueryVar(t *testing.T) {
+	t.Parallel()
+
+	t.Run("os translates darwin to macos, passes linux/windows through", func(t *testing.T) {
+		got, err := resolveContextQueryVar("os", &apiFlags{})
+		require.NoError(t, err)
+		switch runtime.GOOS {
+		case "darwin":
+			assert.Equal(t, "macos", got)
+		case "linux", "windows":
+			assert.Equal(t, runtime.GOOS, got)
+		default:
+			assert.Empty(t, got, "unsupported OS should return empty to skip injection")
+		}
+	})
+
+	t.Run("unknown var returns empty", func(t *testing.T) {
+		got, err := resolveContextQueryVar("definitely-not-a-var", &apiFlags{})
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
 }
 
 // TestResolveBindings_FieldValueStringification covers the non-string

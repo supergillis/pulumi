@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -245,6 +246,10 @@ func runAPI(cmd *cobra.Command, args []string, flags *apiFlags) error {
 
 	bodyBytes, queryExtras, contentType, err := encodeFields(method, fields, flags, mr.Op)
 	if err != nil {
+		return err
+	}
+
+	if err := injectContextQueryParams(mr.Op, method, rawQuery, flags, queryExtras); err != nil {
 		return err
 	}
 
@@ -811,6 +816,84 @@ func resolveTemplateVar(specName, alias string, flags *apiFlags) (string, error)
 				"include the value literally in the path",
 			)
 	}
+}
+
+// contextQueryVars are query parameter names auto-filled when they exist on a route.
+var contextQueryVars = []string{"lang", "os"}
+
+// runtimeToLang maps Pulumi.yaml runtime names to the `lang` values the
+// registry docs API expects.
+var runtimeToLang = map[string]string{
+	"nodejs": "typescript",
+	"dotnet": "csharp",
+	"go":     "go",
+	"python": "python",
+	"yaml":   "yaml",
+	"java":   "java",
+}
+
+// opDeclaresQueryParam reports whether op has a query parameter with the given name.
+func opDeclaresQueryParam(op *Operation, name string) bool {
+	if op == nil {
+		return false
+	}
+	for _, p := range op.Params {
+		if p.In == "query" && p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveContextQueryVar returns the value to send for a context query var.
+// Returns "" to skip injection when the value can't be determined.
+func resolveContextQueryVar(name string, flags *apiFlags) (string, error) {
+	switch name {
+	case "lang":
+		proj, _, err := pkgWorkspace.Instance.ReadProject()
+		if err != nil || proj == nil {
+			return "", nil
+		}
+		if lang, ok := runtimeToLang[proj.Runtime.Name()]; ok {
+			return lang, nil
+		}
+		return "", nil
+	case "os":
+		switch runtime.GOOS {
+		case "darwin":
+			return "macos", nil
+		case "linux", "windows":
+			return runtime.GOOS, nil
+		}
+		return "", nil
+	}
+	return "", nil
+}
+
+// injectContextQueryParams auto-fills query parameters that GET/HEAD operations
+// declare and the user hasn't supplied explicitly.
+func injectContextQueryParams(op *Operation, method, rawQuery string, flags *apiFlags, extras url.Values) error {
+	if method != "GET" && method != "HEAD" {
+		return nil
+	}
+	rawVals, _ := url.ParseQuery(rawQuery)
+	for _, name := range contextQueryVars {
+		if !opDeclaresQueryParam(op, name) {
+			continue
+		}
+		if extras.Has(name) || rawVals.Has(name) {
+			continue
+		}
+		val, err := resolveContextQueryVar(name, flags)
+		if err != nil {
+			return err
+		}
+		if val == "" {
+			continue
+		}
+		extras.Add(name, val)
+	}
+	return nil
 }
 
 // buildConcretePath substitutes resolved values into an OpenAPI path template,
